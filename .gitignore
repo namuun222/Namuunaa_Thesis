@@ -1,0 +1,26 @@
+# Keil machine-specific files
+*.uvguix.*
+*.uvoptx
+
+# Build artifacts
+Objects/
+Listings/
+*.axf
+*.bin
+*.d
+*.dep
+*.elf
+*.hex
+*.o
+*.map
+*.lst
+*.sct
+*.tra
+*.dep
+
+# IAR build output
+iar/Debug/
+
+# JLink
+JLinkLog.txt
+JLinkSettings.ini
