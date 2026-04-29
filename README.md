@@ -158,10 +158,3 @@ Output = Input + Kernel - 1
 Output matrix = 6x6 = 36 values
 
 ```
-
----
-
-## Dependencies
-- AmbiqSuite SDK R4.5.0 (download from Ambiq website)
-- Keil MDK with Cortex-M4 support
-- SEGGER J-Link drivers
