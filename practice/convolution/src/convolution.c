@@ -1,61 +1,3 @@
-//*****************************************************************************
-//
-//! @file hello_world_uart.c
-//!
-//! @brief A simple "Hello World" example using the UART peripheral.
-//!
-//! @addtogroup peripheral_examples Peripheral Examples
-//
-//! @defgroup hello_world_uart Hello World UART Example
-//! @ingroup peripheral_examples
-//! @{
-//!
-//! Purpose: This example prints a "Hello World" message with some device info
-//! over UART at 115200 baud.
-//! To see the output of this program, run a terminal appl such as
-//! Tera Term or PuTTY, and configure the console for UART.
-//! The example sleeps after it is done printing.
-//
-//*****************************************************************************
-
-//*****************************************************************************
-//
-// Copyright (c) 2024, Ambiq Micro, Inc.
-// All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// 1. Redistributions of source code must retain the above copyright notice,
-// this list of conditions and the following disclaimer.
-//
-// 2. Redistributions in binary form must reproduce the above copyright
-// notice, this list of conditions and the following disclaimer in the
-// documentation and/or other materials provided with the distribution.
-//
-// 3. Neither the name of the copyright holder nor the names of its
-// contributors may be used to endorse or promote products derived from this
-// software without specific prior written permission.
-//
-// Third party software included in this distribution is subject to the
-// additional license terms as defined in the /docs/licenses directory.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-//
-// This is part of revision release_sdk_4_5_0-a1ef3b89f9 of the AmbiqSuite Development Package.
-//
-//*****************************************************************************
-
 #include "am_mcu_apollo.h"
 #include "am_bsp.h"
 #include "am_util.h"
@@ -198,16 +140,8 @@ uart_print(char *pcStr)
 // Main
 //
 //*****************************************************************************
-int
-main(void)
+int main(void)
 {
-    am_util_id_t sIdDevice;
-    uint32_t ui32StrBuf;
-    am_hal_reset_status_t sResetStatus;
-    am_hal_security_info_t secInfo;
-    uint32_t ui32Ret;
-    uint32_t ui32TrimVer;
-    char sINFO[32];
 
     //
     // Set the default cache configuration
@@ -286,7 +220,7 @@ am_util_stdio_printf("Writing kernel to MRAM...\n");
 am_hal_mram_main_words_program(AM_HAL_MRAM_PROGRAM_KEY,
     (uint32_t *)pKernel, pMRAM_Kernel, 12);
 
-// --- Read back input from MRAM -----------------------------
+// --- Read back input from MRAM -----------------------------	`
 am_util_stdio_printf("Reading input from MRAM...\n");
 float32_t pSrc_read[16];
 for (int i = 0; i < 16; i++)
@@ -328,130 +262,117 @@ for (int i = 0; i < 6; i++)
 }
 am_util_stdio_printf("\nDone!\n");
 
-    //
-    // Print the compiler version.
-    //
-    am_hal_uart_tx_flush(phUART);
-    am_util_stdio_printf("App Compiler:    %s\n", COMPILER_VERSION);
-    am_util_stdio_printf("HAL Compiler:    %s\n", g_ui8HALcompiler);
-    am_util_stdio_printf("HAL SDK version: %d.%d.%d\n",
-                         g_ui32HALversion.s.Major,
-                         g_ui32HALversion.s.Minor,
-                         g_ui32HALversion.s.Revision);
-    am_util_stdio_printf("HAL compiled with %s-style registers\n",
-                         g_ui32HALversion.s.bAMREGS ? "AM_REG" : "CMSIS");
+// -----------------------------------------------------------
+// Q15 CONVOLUTION
+// -----------------------------------------------------------
+
+am_util_stdio_printf("\n\n--- Q15 Convolution ---\n\n");
+
+// --- Input (4x4) normalized to q15 ------------------------
+q15_t pSrc_q15[16] =
+{
+    (q15_t)(0.0625f * 32768),
+    (q15_t)(0.125f  * 32768),
+    (q15_t)(0.1875f * 32768),
+    (q15_t)(0.25f   * 32768),
+    (q15_t)(0.3125f * 32768),
+    (q15_t)(0.375f  * 32768),
+    (q15_t)(0.4375f * 32768),
+    (q15_t)(0.5f    * 32768),
+    (q15_t)(0.5625f * 32768),
+    (q15_t)(0.625f  * 32768),
+    (q15_t)(0.6875f * 32768),
+    (q15_t)(0.75f   * 32768),
+    (q15_t)(0.8125f * 32768),
+    (q15_t)(0.875f  * 32768),
+    (q15_t)(0.9375f * 32768),
+    (q15_t)(1.0f    * 32767)
+};
+
+// --- Kernel (3x3) ------------------------------------------
+q15_t pKernel_q15[12] =
+{
+    (q15_t)(1.0f  * 32767),
+    (q15_t)(0.0f  * 32767),
+    (q15_t)(-1.0f * 32767),
+    (q15_t)(1.0f  * 32767),
+    (q15_t)(0.0f  * 32767),
+    (q15_t)(-1.0f * 32767),
+    (q15_t)(1.0f  * 32767),
+    (q15_t)(0.0f  * 32767),
+    (q15_t)(-1.0f * 32767),
+		0,0,0
+};
+
+// --- Output (6x6) ------------------------------------------
+q15_t pDst_q15[36] = {0};
+
+// --- New MRAM addresses (different from float32!) ----------
+uint32_t *pMRAM_Input_q15  = (uint32_t *)0x00083000;
+uint32_t *pMRAM_Kernel_q15 = (uint32_t *)0x00084000;
+uint32_t *pMRAM_Output_q15 = (uint32_t *)0x00085000;
+
+// --- Write to MRAM -----------------------------------------
+am_util_stdio_printf("Writing q15 input to MRAM...\n");
+am_hal_mram_main_words_program(AM_HAL_MRAM_PROGRAM_KEY,
+    (uint32_t *)pSrc_q15, pMRAM_Input_q15, 8);
+
+am_util_stdio_printf("Writing q15 kernel to MRAM...\n");
+am_hal_mram_main_words_program(AM_HAL_MRAM_PROGRAM_KEY,
+    (uint32_t *)pKernel_q15, pMRAM_Kernel_q15, 8);
+
+// --- Read back from MRAM -----------------------------------
+am_util_stdio_printf("Reading back from MRAM...\n");
+q15_t pSrc_read_q15[16];
+q15_t pKernel_read_q15[9];
+
+for (int i = 0; i < 8; i++)
+{
+    uint32_t word = *(pMRAM_Input_q15 + i);
+    pSrc_read_q15[i*2]   = (q15_t)(word & 0xFFFF);
+    pSrc_read_q15[i*2+1] = (q15_t)(word >> 16);
+}
+
+for (int i = 0; i < 4; i++)
+{
+    uint32_t word = *(pMRAM_Kernel_q15 + i);
+    pKernel_read_q15[i*2] = (q15_t)(word & 0xFFFF);
+    if (i*2+1 < 9)
+        pKernel_read_q15[i*2+1] = (q15_t)(word >> 16);
+}
+
+// --- 2D Convolution ----------------------------------------
+am_util_stdio_printf("Performing Q15 2D Convolution...\n\n");
+for (int row = 0; row < 4; row++)
+{
+    arm_conv_q15(&pSrc_read_q15[row * 4], 4,
+                  pKernel_read_q15, 3,
+                  &pDst_q15[row * 6]);
+}
+
+// --- Write output to MRAM ----------------------------------
+am_util_stdio_printf("Writing q15 output to MRAM...\n\n");
+am_hal_mram_main_words_program(AM_HAL_MRAM_PROGRAM_KEY,
+    (uint32_t *)pDst_q15, pMRAM_Output_q15, 18);
+
+// --- Print output ------------------------------------------
+am_util_stdio_printf("Q15 Convolution Output (6x6):\n");
+for (int i = 0; i < 6; i++)
+{
+    for (int j = 0; j < 6; j++)
+    {
+        float32_t val = (float32_t)pDst_q15[i*6+j] / 32768.0f;
+        am_util_stdio_printf("%6.4f ", val);
+    }
     am_util_stdio_printf("\n");
+}
+am_util_stdio_printf("\nQ15 Done!\n");
 
-    am_util_stdio_printf("SECURITY INFO\n");
-    am_util_stdio_printf("=============\n");
-
-    am_hal_reset_status_get(&sResetStatus);
-    am_util_stdio_printf("Reset Status:    0x%X\n", sResetStatus.eStatus);
-
-    ui32Ret = am_hal_security_get_info(&secInfo);
-    if (ui32Ret == AM_HAL_STATUS_SUCCESS)
-    {
-        if ( secInfo.bInfo0Valid )
-        {
-            am_util_stdio_sprintf(sINFO, "INFO0 valid, ver 0x%X", secInfo.info0Version);
-        }
-        else
-        {
-            am_util_stdio_sprintf(sINFO, "INFO0 invalid");
-        }
-
-        am_util_stdio_printf("SBL version:     0x%X - 0x%X, %s\n",
-                             secInfo.sblVersion, secInfo.sblVersionAddInfo, sINFO);
-
-        uint32_t lcs = secInfo.lcs;
-        am_util_stdio_printf("SBR version:     0x%x\n",
-            secInfo.sbrVersion);
-        am_util_stdio_printf("Device LCS: %s\n",
-                             ((lcs == 0) ? "CM" :       \
-                             ((lcs == 1) ? "DM" :       \
-                             ((lcs == 5) ? "Secure" :   \
-                             ((lcs == 7) ? "RMA" : "Undefined")))));
-        am_util_stdio_printf("SBL Staging Area:     0x%x\n",
-            secInfo.sblStagingAddr);
-    }
-    else
-    {
-        am_util_stdio_printf("am_hal_security_get_info failed 0x%X\n", ui32Ret);
-    }
-
-    am_hal_security_socid_t socId;
-    uint32_t ui32Var;
-    uint32_t ui32dcuVal;
-    am_hal_dcu_get(&ui32dcuVal);
-    am_hal_security_get_socid(&socId);
-    am_util_stdio_printf("\tSOC Id:\n\t0x%08X : 0x%08X : 0x%08X : 0x%08X\n\t0x%08X : 0x%08X : 0x%08X : 0x%08X\n",
-                             socId.socid[0], socId.socid[1], socId.socid[2], socId.socid[3],
-                             socId.socid[4], socId.socid[5], socId.socid[6], socId.socid[7] );
-    if ( secInfo.bInfo0Valid )
-    {
-        am_hal_mram_info_read(0, AM_REG_INFO0_SBR_SDCERT_ADDR_O / 4, 1, &ui32Var);
-    }
-    else
-    {
-        am_hal_mram_info_read(1, AM_REG_INFO1_SBR_SDCERT_ADDR_O / 4, 1, &ui32Var);
-    }
-    am_util_stdio_printf("Secure Debug Certificate Location: 0x%08X\n", ui32Var);
-    am_hal_mram_info_read(1, AM_REG_INFO1_SBR_OPT_ADDR_O / 4, 1, &ui32Var);
-    am_util_stdio_printf("SBR OPT Address: 0x%08X\n", ui32Var);
-    am_util_stdio_printf("\n");
-
-    am_util_stdio_printf("DEBUG INFO\n");
-    am_util_stdio_printf("==========\n");
-#ifdef ENABLE_DEBUGGER
-    // Enable Debugger
-    if (am_hal_dcu_update(true, (AM_HAL_DCU_SWD | AM_HAL_DCU_CPUDBG_INVASIVE | AM_HAL_DCU_CPUDBG_NON_INVASIVE)) != AM_HAL_STATUS_SUCCESS)
-    {
-        // Cannot enable Debugger
-        am_util_stdio_printf("Could not enable debugger\n");
-    }
-    else
-    {
-        am_util_stdio_printf("Forcibly enabling debugger\n");
-    }
-#endif // ENABLE_DEBUGGER
-    if ((PWRCTRL->DEVPWRSTATUS_b.PWRSTCRYPTO == 1) && (CRYPTO->HOSTCCISIDLE_b.HOSTCCISIDLE == 1))
-    {
-        am_util_stdio_printf("Original Qualified DCU Val   0x%x\n", ui32dcuVal);
-        am_hal_dcu_get(&ui32dcuVal);
-        am_util_stdio_printf("Current Qualified DCU Val 0x%x\n", ui32dcuVal);
-        am_hal_dcu_lock_status_get(&ui32dcuVal);
-        am_util_stdio_printf("Qualified DCU Lock Val       0x%x\n", ui32dcuVal);
-        DIAG_SUPPRESS_VOLATILE_ORDER()
-        am_util_stdio_printf("\tRaw DCU Enable: 0x%08X : 0x%08X : 0x%08X : 0x%08X\n",
-                             CRYPTO->HOSTDCUEN0, CRYPTO->HOSTDCUEN1, CRYPTO->HOSTDCUEN2, CRYPTO->HOSTDCUEN3);
-        am_util_stdio_printf("\tRaw DCU Lock  : 0x%08X : 0x%08X : 0x%08X : 0x%08X\n",
-                             CRYPTO->HOSTDCULOCK0, CRYPTO->HOSTDCULOCK1, CRYPTO->HOSTDCULOCK2, CRYPTO->HOSTDCULOCK3);
-        DIAG_DEFAULT_VOLATILE_ORDER()
-        am_util_stdio_printf("\n");
-    }
-
-    //
-    // We are done printing.
-    // Disable the UART and interrupts
-    //
     am_hal_uart_tx_flush(phUART);
     CHECK_ERRORS(am_hal_uart_power_control(phUART, AM_HAL_SYSCTRL_DEEPSLEEP, false));
-
-    //
-    // Loop forever while sleeping.
-    //
+		
     while (1)
     {
-        //
-        // Go to Deep Sleep.
-        //
         am_hal_sysctrl_sleep(AM_HAL_SYSCTRL_SLEEP_DEEP);
     }
 }
-
-//*****************************************************************************
-//
-// End Doxygen group.
-//! @}
-//
-//*****************************************************************************
