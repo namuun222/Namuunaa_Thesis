@@ -6,21 +6,17 @@
 #include "weights.h"
 #include "mnist_test_inputs.h"
 
-//*****************************************************************************
 // MRAM addresses for weights
-//*****************************************************************************
+
 #define MRAM_CONV0_WT    ((q7_t *)0x00090000)
 #define MRAM_CONV0_BIAS  ((q7_t *)0x00090200)
 
-//*****************************************************************************
 // Weight sizes in words
-//*****************************************************************************
+
 #define CONV0_WT_WORDS    72    // 3*3*1*32 = 288 bytes / 4
 #define CONV0_BIAS_WORDS  8     // 32 bytes / 4
 
-//*****************************************************************************
 // UART handle
-//*****************************************************************************
 void *phUART;
 
 #define CHECK_ERRORS(x)                                                       \
@@ -31,9 +27,8 @@ void *phUART;
 
 volatile uint32_t ui32LastError;
 
-//*****************************************************************************
 // Catch HAL errors
-//*****************************************************************************
+
 void error_handler(uint32_t ui32ErrorStatus)
 {
     ui32LastError = ui32ErrorStatus;
@@ -100,10 +95,9 @@ void uart_print(char *pcStr)
     if (ui32BytesWritten != ui32StrLen) while(1);
 }
 
-//*****************************************************************************
 // CNN feature map buffers (SRAM - temporary per layer)
 // Weights stored in MRAM as const arrays (weights.h)
-//*****************************************************************************
+
 static q7_t buf1[28*28*32];   // Conv0 output: 28x28x32
 static q7_t buf2[14*14*32];   // Pool0 output: 14x14x32
 static q7_t buf3[14*14*32];   // Conv1 output: 14x14x32
@@ -117,10 +111,8 @@ static q7_t output[10];       // FCo  output: 10 class scores
 // Scratch buffer for CMSIS-NN convolution intermediate calculations
 static q15_t scratch[2*9*64*2];
 
-//*****************************************************************************
 // Store weights to MRAM using SRAM intermediate buffer
-// Uses am_hal_mram_main_program (source must be in SRAM not MRAM)
-//*****************************************************************************
+
 void store_weights_to_mram(void)
 {
     uint32_t buffer[4];
@@ -160,9 +152,6 @@ void store_weights_to_mram(void)
     am_hal_uart_tx_flush(phUART);
 }
 
-//*****************************************************************************
-// Main
-//*****************************************************************************
 int main(void)
 {
     //
