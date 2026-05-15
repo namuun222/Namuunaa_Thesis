@@ -7,14 +7,32 @@
 #include "mnist_test_inputs.h"
 
 // MRAM addresses for weights
-
 #define MRAM_CONV0_WT    ((q7_t *)0x00090000)
 #define MRAM_CONV0_BIAS  ((q7_t *)0x00090200)
+#define MRAM_CONV1_WT    ((q7_t *)0x00091000)
+#define MRAM_CONV1_BIAS  ((q7_t *)0x00093400)
+#define MRAM_CONV2_WT    ((q7_t *)0x00094000)
+#define MRAM_CONV2_BIAS  ((q7_t *)0x00098800)
+#define MRAM_CONV3_WT    ((q7_t *)0x00099000)
+#define MRAM_CONV3_BIAS  ((q7_t *)0x000A2000)
+#define MRAM_FC1_WT      ((q7_t *)0x000A3000)
+#define MRAM_FC1_BIAS    ((q7_t *)0x000E3000)
+#define MRAM_FCO_WT      ((q7_t *)0x000E4000)
+#define MRAM_FCO_BIAS    ((q7_t *)0x000E4A00)
 
 // Weight sizes in words
-
-#define CONV0_WT_WORDS    72    // 3*3*1*32 = 288 bytes / 4
-#define CONV0_BIAS_WORDS  8     // 32 bytes / 4
+#define CONV0_WT_WORDS    72      // 3*3*1*32  = 288 bytes / 4
+#define CONV0_BIAS_WORDS  8       // 32 bytes / 4
+#define CONV1_WT_WORDS    2304    // 3*3*32*32 = 9216 bytes / 4
+#define CONV1_BIAS_WORDS  8       // 32 bytes / 4
+#define CONV2_WT_WORDS    4608    // 3*3*32*64 = 18432 bytes / 4
+#define CONV2_BIAS_WORDS  16      // 64 bytes / 4
+#define CONV3_WT_WORDS    9216    // 3*3*64*64 = 36864 bytes / 4
+#define CONV3_BIAS_WORDS  16      // 64 bytes / 4
+#define FC1_WT_WORDS      65536   // 256*1024  = 262144 bytes / 4
+#define FC1_BIAS_WORDS    64      // 256 bytes / 4
+#define FCO_WT_WORDS      640     // 10*256    = 2560 bytes / 4
+#define FCO_BIAS_WORDS    4       // 10 bytes rounded up
 
 // UART handle
 void *phUART;
@@ -120,35 +138,64 @@ void store_weights_to_mram(void)
     uint32_t *dst;
     int i;
 
-    //am_util_stdio_printf("=== Storing weights to MRAM ===\n");
-    //am_hal_uart_tx_flush(phUART);
-
-    // Write conv0_wt word by word via SRAM buffer
-    am_util_stdio_printf("Writing conv0_wt...\n");
+    am_util_stdio_printf("Storing weights to MRAM...\n");
     am_hal_uart_tx_flush(phUART);
 
-    src = (uint32_t *)conv0_wt;
-    dst = (uint32_t *)MRAM_CONV0_WT;
-    for(i = 0; i < CONV0_WT_WORDS; i++)
-    {
-        buffer[0] = src[i];
-        buffer[1] = 0;
-        buffer[2] = 0;
-        buffer[3] = 0;
-        am_hal_mram_main_program(AM_HAL_MRAM_PROGRAM_KEY,
-                                 buffer,
-                                 &dst[i],
-                                 4);
-    }
+    // Helper macro to write one weight array
+    #define WRITE_WEIGHTS(wt, addr, words) \
+        src = (uint32_t *)(wt); \
+        dst = (uint32_t *)(addr); \
+        for(i = 0; i < (words); i+=4) { \
+            buffer[0] = src[i]; \
+            buffer[1] = src[i+1]; buffer[2] = src[i+2]; buffer[3] = src[i+3]; \
+            am_hal_mram_main_program(AM_HAL_MRAM_PROGRAM_KEY, \
+                                     buffer, &dst[i], 4); \
+        }
 
-    // Verify - compare first few values
+    // Conv0
+    WRITE_WEIGHTS(conv0_wt,   MRAM_CONV0_WT,   CONV0_WT_WORDS);
+    WRITE_WEIGHTS(conv0_bias, MRAM_CONV0_BIAS,  CONV0_BIAS_WORDS);
+    am_util_stdio_printf("Conv0 done\n");
+    am_hal_uart_tx_flush(phUART);
+
+    // Conv1
+    WRITE_WEIGHTS(conv1_wt,   MRAM_CONV1_WT,   CONV1_WT_WORDS);
+    WRITE_WEIGHTS(conv1_bias, MRAM_CONV1_BIAS,  CONV1_BIAS_WORDS);
+    am_util_stdio_printf("Conv1 done\n");
+    am_hal_uart_tx_flush(phUART);
+
+    // Conv2
+    WRITE_WEIGHTS(conv2_wt,   MRAM_CONV2_WT,   CONV2_WT_WORDS);
+    WRITE_WEIGHTS(conv2_bias, MRAM_CONV2_BIAS,  CONV2_BIAS_WORDS);
+    am_util_stdio_printf("Conv2 done\n");
+    am_hal_uart_tx_flush(phUART);
+
+    // Conv3
+    WRITE_WEIGHTS(conv3_wt,   MRAM_CONV3_WT,   CONV3_WT_WORDS);
+    WRITE_WEIGHTS(conv3_bias, MRAM_CONV3_BIAS,  CONV3_BIAS_WORDS);
+    am_util_stdio_printf("Conv3 done\n");
+    am_hal_uart_tx_flush(phUART);
+
+    // FC1
+    WRITE_WEIGHTS(fc1_wt,   MRAM_FC1_WT,   FC1_WT_WORDS);
+    WRITE_WEIGHTS(fc1_bias, MRAM_FC1_BIAS,  FC1_BIAS_WORDS);
+    am_util_stdio_printf("FC1 done\n");
+    am_hal_uart_tx_flush(phUART);
+
+    // FCo
+    WRITE_WEIGHTS(fco_wt,   MRAM_FCO_WT,   FCO_WT_WORDS);
+    WRITE_WEIGHTS(fco_bias, MRAM_FCO_BIAS,  FCO_BIAS_WORDS);
+    am_util_stdio_printf("FCo done\n");
+    am_hal_uart_tx_flush(phUART);
+
+    // Verify first 8 values
     am_util_stdio_printf("Verify conv0_wt:\n");
-    am_util_stdio_printf("  orig[0]=%d  mram[0]=%d\n",
-        conv0_wt[0], ((q7_t*)MRAM_CONV0_WT)[0]);
-    am_util_stdio_printf("  orig[1]=%d  mram[1]=%d\n",
-        conv0_wt[1], ((q7_t*)MRAM_CONV0_WT)[1]);
-    am_util_stdio_printf("  orig[2]=%d  mram[2]=%d\n",
-        conv0_wt[2], ((q7_t*)MRAM_CONV0_WT)[2]);
+    for(int j = 0; j < 8; j++)
+        am_util_stdio_printf("orig[%d]=%d mram[%d]=%d\n",
+            j, conv0_wt[j], j, MRAM_CONV0_WT[j]);
+    am_hal_uart_tx_flush(phUART);
+
+    am_util_stdio_printf("All weights stored!\n\n");
     am_hal_uart_tx_flush(phUART);
 }
 
@@ -200,6 +247,15 @@ int main(void)
     // Test MRAM write with conv0_wt only
     //
     store_weights_to_mram();
+		// Check first 8 values of conv0_wt
+am_util_stdio_printf("Checking conv0_wt values:\n");
+for(int i = 0; i < 8; i++)
+{
+    am_util_stdio_printf("orig[%d]=%d  mram[%d]=%d\n",
+        i, conv0_wt[i],
+        i, MRAM_CONV0_WT[i]);
+}
+am_hal_uart_tx_flush(phUART);
 
     // CNN Architecture:
     // Input:  28x28x1
@@ -219,15 +275,15 @@ int main(void)
     //
     am_util_stdio_printf("Running Conv0...\n");
     arm_convolve_HWC_q7_basic(
-        test_input_d2,           // input image
+        test_input_d7,           // input image
         28,                      // input width/height
         1,                       // input channels
-        conv0_wt,                // weights (in MRAM)
+        MRAM_CONV0_WT,           // weights
         32,                      // output channels
         3,                       // kernel size
         1,                       // padding
         1,                       // stride
-        conv0_bias,              // bias (in MRAM)
+        MRAM_CONV0_BIAS,              // bias 
         CONV0_BIAS_SHIFT,        // bias shift
         CONV0_OUT_SHIFT,         // output shift
         buf1,                    // output buffer
@@ -249,8 +305,8 @@ int main(void)
     am_util_stdio_printf("Running Conv1...\n");
     arm_convolve_HWC_q7_fast(
         buf2, 14, 32,
-        conv1_wt, 32, 3, 1, 1,
-        conv1_bias, CONV1_BIAS_SHIFT, CONV1_OUT_SHIFT,
+        MRAM_CONV1_WT, 32, 3, 1, 1,
+        MRAM_CONV1_BIAS, CONV1_BIAS_SHIFT, CONV1_OUT_SHIFT,
         buf3, 14, (q15_t*)scratch, NULL
     );
     arm_relu_q7(buf3, 14*14*32);
@@ -267,8 +323,8 @@ int main(void)
     am_util_stdio_printf("Running Conv2...\n");
     arm_convolve_HWC_q7_fast(
         buf4, 7, 32,
-        conv2_wt, 64, 3, 1, 1,
-        conv2_bias, CONV2_BIAS_SHIFT, CONV2_OUT_SHIFT,
+        MRAM_CONV2_WT, 64, 3, 1, 1,
+        MRAM_CONV2_BIAS, CONV2_BIAS_SHIFT, CONV2_OUT_SHIFT,
         buf5, 7, (q15_t*)scratch, NULL
     );
     arm_relu_q7(buf5, 7*7*64);
@@ -279,8 +335,8 @@ int main(void)
     am_util_stdio_printf("Running Conv3...\n");
     arm_convolve_HWC_q7_fast(
         buf5, 7, 64,
-        conv3_wt, 64, 3, 1, 1,
-        conv3_bias, CONV3_BIAS_SHIFT, CONV3_OUT_SHIFT,
+        MRAM_CONV3_WT, 64, 3, 1, 1,
+        MRAM_CONV3_BIAS, CONV3_BIAS_SHIFT, CONV3_OUT_SHIFT,
         buf6, 7, (q15_t*)scratch, NULL
     );
     arm_relu_q7(buf6, 7*7*64);
@@ -296,9 +352,9 @@ int main(void)
     //
     am_util_stdio_printf("Running FC1...\n");
     arm_fully_connected_q7(
-        buf7, fc1_wt, 1024, 256,
+        buf7, MRAM_FC1_WT, 1024, 256,
         FC1_BIAS_SHIFT, FC1_OUT_SHIFT,
-        fc1_bias, buf8, (q15_t*)scratch
+        MRAM_FC1_BIAS, buf8, (q15_t*)scratch
     );
     arm_relu_q7(buf8, 256);
 
@@ -307,9 +363,9 @@ int main(void)
     //
     am_util_stdio_printf("Running FCo...\n");
     arm_fully_connected_q7(
-        buf8, fco_wt, 256, 10,
+        buf8, MRAM_FCO_WT, 256, 10,
         FCO_BIAS_SHIFT, FCO_OUT_SHIFT,
-        fco_bias, output, (q15_t*)scratch
+        MRAM_FCO_BIAS, output, (q15_t*)scratch
     );
 
     //
