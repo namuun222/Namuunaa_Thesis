@@ -16,7 +16,6 @@ Listings/
 *.lst
 *.sct
 *.tra
-*.dep
 
 # IAR build output
 iar/Debug/
@@ -24,3 +23,13 @@ iar/Debug/
 # JLink
 JLinkLog.txt
 JLinkSettings.ini
+
+# Large SDK folders - not tracked
+AmbiqSuite_R4.5.0/
+CMSIS_5-5.9.0/
+CMSIS_6-6.3.0/
+CMSIS_5-5.9.0.zip
+CMSIS_6-6.3.0.zip
+mnist/
+ 
+ 
