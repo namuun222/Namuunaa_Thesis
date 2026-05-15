@@ -162,7 +162,7 @@ Output matrix = 6x6 = 36 values
 
 - **Source:** [MNIST-Keras saved models](https://github.com/kj7kunal/MNIST-Keras/tree/master/saved_models)
 - **File:** `MNIST_keras_w_CNN.h5`
-
+### 3. MNIST_CNN
 
 ### Architecture
 
