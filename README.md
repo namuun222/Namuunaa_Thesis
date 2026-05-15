@@ -158,3 +158,159 @@ Output = Input + Kernel - 1
 Output matrix = 6x6 = 36 values
 
 ```
+
+
+- **Source:** [MNIST-Keras saved models](https://github.com/kj7kunal/MNIST-Keras/tree/master/saved_models)
+- **File:** `MNIST_keras_w_CNN.h5`
+
+
+### Architecture
+
+```
+Input:  28x28x1 (grayscale image)
+Conv0:  3x3, 32 filters, pad=1, stride=1  → 28x28x32
+BN0 + ReLU
+Conv1:  3x3, 32 filters, pad=1, stride=1  → 28x28x32
+BN1 + ReLU
+MaxPool1: 2x2, stride=2                   → 14x14x32
+Conv2:  3x3, 64 filters, pad=1, stride=1  → 14x14x64
+BN2 + ReLU
+Conv3:  3x3, 64 filters, pad=1, stride=1  → 14x14x64
+BN3 + ReLU
+MaxPool2: 2x2, stride=2                   → 7x7x64
+MaxPool3: 4x4, stride=1                   → 4x4x64 = 1024
+FC1:    1024 → 256 + ReLU
+FCo:    256  → 10
+Softmax → predicted digit (0-9)
+```
+
+---
+
+## Quantization
+
+Post-training quantization from float32 to **q7 (8-bit signed integer)**:
+
+- BatchNorm layers are **folded** into Conv weights before quantization
+- Per-layer activation ranges computed from float32 inference
+- Scale factor: `127 / max_activation`
+- Shift values computed per layer for CMSIS-NN
+
+**Quantized accuracy on board:** 6/10 test samples correct
+
+---
+
+## Weight Storage
+
+Weights are stored in **MRAM** at explicit fixed addresses using `am_hal_mram_main_program()`. An intermediate SRAM buffer is used to avoid MRAM-to-MRAM copy issues:
+
+```c
+// Write one weight array to MRAM
+for(i = 0; i < WORDS; i++) {
+    buffer[0] = src[i];   // copy to SRAM first
+    buffer[1] = 0; buffer[2] = 0; buffer[3] = 0;
+    am_hal_mram_main_program(AM_HAL_MRAM_PROGRAM_KEY,
+                             buffer, &dst[i], 4);
+}
+```
+
+### MRAM Memory Map
+
+| Symbol          | Address      | Size      |
+|-----------------|--------------|-----------|
+| MRAM_CONV0_WT   | 0x00090000   | 288 bytes |
+| MRAM_CONV0_BIAS | 0x00090200   | 32 bytes  |
+| MRAM_CONV1_WT   | 0x00091000   | 9216 bytes|
+| MRAM_CONV1_BIAS | 0x00093400   | 32 bytes  |
+| MRAM_CONV2_WT   | 0x00094000   | 18432 bytes|
+| MRAM_CONV2_BIAS | 0x00098800   | 64 bytes  |
+| MRAM_CONV3_WT   | 0x00099000   | 36864 bytes|
+| MRAM_CONV3_BIAS | 0x000A2000   | 64 bytes  |
+| MRAM_FC1_WT     | 0x000A3000   | 262144 bytes|
+| MRAM_FC1_BIAS   | 0x000E3000   | 256 bytes |
+| MRAM_FCO_WT     | 0x000E4000   | 2560 bytes|
+| MRAM_FCO_BIAS   | 0x000E4A00   | 10 bytes  |
+
+---
+
+
+###  Include Paths
+
+Add the following to **Project → Options for Target → C/C++ → Include Paths**:
+
+```
+C:\Users\Dell\Namuunaa_Thesis\CMSIS_5-5.9.0\CMSIS_5-5.9.0\CMSIS\NN\Include
+C:\Users\Dell\Namuunaa_Thesis\CMSIS_5-5.9.0\CMSIS_5-5.9.0\CMSIS\Core\Include
+```
+
+### Preprocessor Defines
+
+Add the following to **Project → Options for Target → C/C++ → Define**:
+
+```
+AM_PACKAGE_BGA AM_PART_APOLLO4L keil6 ARM_MATH_CM4 ARM_MATH_DSP
+```
+
+###  CMSIS-NN Source Files
+
+Create a group `cnn_mnist` in the project and add these source files:
+
+```
+CMSIS_5-5.9.0\CMSIS\NN\Source\ConvolutionFunctions\
+    arm_convolve_HWC_q7_basic.c
+    arm_convolve_HWC_q7_fast.c
+    arm_nn_mat_mult_kernel_q7_q15.c
+
+CMSIS_5-5.9.0\CMSIS\NN\Source\FullyConnectedFunctions\
+    arm_fully_connected_q7.c
+
+CMSIS_5-5.9.0\CMSIS\NN\Source\PoolingFunctions\
+    arm_pool_q7_HWC.c
+
+CMSIS_5-5.9.0\CMSIS\NN\Source\ActivationFunctions\
+    arm_relu_q7.c
+
+CMSIS_5-5.9.0\CMSIS\NN\Source\SoftmaxFunctions\
+    arm_softmax_q7.c
+```
+
+---
+
+## Source Files
+
+| File | Description |
+|------|-------------|
+| `src/mnist_cnn.c` | Main inference code — UART init, weight storage, CNN layers |
+| `src/weights.h` | Quantized q7 weights, biases, and shift values |
+| `src/mnist_test_inputs.h` | Real MNIST test samples (one per digit 0-9) |
+
+---
+
+## CMSIS-NN Functions Used
+
+| Function | Purpose |
+|----------|---------|
+| `arm_convolve_HWC_q7_basic()` | Conv0 (1 input channel) |
+| `arm_convolve_HWC_q7_fast()` | Conv1, Conv2, Conv3 (SIMD optimized) |
+| `arm_maxpool_q7_HWC()` | MaxPool layers |
+| `arm_relu_q7()` | ReLU activation |
+| `arm_fully_connected_q7()` | FC1 and FCo layers |
+| `arm_softmax_q7()` | Output probabilities |
+
+---
+
+## Results
+
+| Digit | Predicted | Correct? |
+|-------|-----------|----------|
+| 0     | 8         | ✗        |
+| 1     | 1         | ✓        |
+| 2     | 2         | ✓        |
+| 3     | 3         | ✓        |
+| 4     | 4         | ✓        |
+| 5     | 5         | ✓        |
+| 6     | 2         | ✗        |
+| 7     | 7         | ✓        |
+| 8     | 3         | ✗        |
+| 9     | 7         | ✗        |
+
+
