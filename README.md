@@ -212,27 +212,6 @@ for(i = 0; i < WORDS; i++) {
                              buffer, &dst[i], 4);
 }
 ```
-
-### MRAM Memory Map
-
-| Symbol          | Address      | Size      |
-|-----------------|--------------|-----------|
-| MRAM_CONV0_WT   | 0x00090000   | 288 bytes |
-| MRAM_CONV0_BIAS | 0x00090200   | 32 bytes  |
-| MRAM_CONV1_WT   | 0x00091000   | 9216 bytes|
-| MRAM_CONV1_BIAS | 0x00093400   | 32 bytes  |
-| MRAM_CONV2_WT   | 0x00094000   | 18432 bytes|
-| MRAM_CONV2_BIAS | 0x00098800   | 64 bytes  |
-| MRAM_CONV3_WT   | 0x00099000   | 36864 bytes|
-| MRAM_CONV3_BIAS | 0x000A2000   | 64 bytes  |
-| MRAM_FC1_WT     | 0x000A3000   | 262144 bytes|
-| MRAM_FC1_BIAS   | 0x000E3000   | 256 bytes |
-| MRAM_FCO_WT     | 0x000E4000   | 2560 bytes|
-| MRAM_FCO_BIAS   | 0x000E4A00   | 10 bytes  |
-
----
-
-
 ###  Include Paths
 
 Add the following to **Project → Options for Target → C/C++ → Include Paths**:
@@ -297,20 +276,5 @@ CMSIS_5-5.9.0\CMSIS\NN\Source\SoftmaxFunctions\
 | `arm_softmax_q7()` | Output probabilities |
 
 ---
-
-## Results
-
-| Digit | Predicted | Correct? |
-|-------|-----------|----------|
-| 0     | 8         | ✗        |
-| 1     | 1         | ✓        |
-| 2     | 2         | ✓        |
-| 3     | 3         | ✓        |
-| 4     | 4         | ✓        |
-| 5     | 5         | ✓        |
-| 6     | 2         | ✗        |
-| 7     | 7         | ✓        |
-| 8     | 3         | ✗        |
-| 9     | 7         | ✗        |
 
 
