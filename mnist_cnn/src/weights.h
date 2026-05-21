@@ -17,6 +17,8 @@
 #define FCO_OUT_SHIFT    9
 #define FCO_BIAS_SHIFT   1
 
+
+
 // Layer dimensions
 #define INPUT_H       28
 #define INPUT_W       28
