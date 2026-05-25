@@ -85,4 +85,20 @@ static const FCConfig_t fc_layers[NUM_FC_LAYERS] = {
     // FCo: 256 -> 10
     { fco_wt, fco_bias,  256,  10, FCO_BIAS_SHIFT, FCO_OUT_SHIFT },
 };
+
+//buffer sized for mram
+static const uint32_t buf_sizes[] = {
+    28*28*32,   // buf0: conv0 output  = 25088 bytes
+    14*14*32,   // buf1: pool0 output  =  6272 bytes
+    14*14*32,   // buf2: conv1 output  =  6272 bytes
+    7*7*32,     // buf3: pool1 output  =  1568 bytes
+    7*7*64,     // buf4: conv2 output  =  3136 bytes
+    7*7*64,     // buf5: conv3 output  =  3136 bytes
+    4*4*64,     // buf6: pool2 output  =  1024 bytes
+    256,        // buf7: fc1  output   =   256 bytes
+    10,         // buf8: fco  output   =    10 bytes
+};
+
+#define NUM_BUFFERS 9
+#define MRAM_BASE    0x0006F000 
 #endif // MODEL_CONFIG_H

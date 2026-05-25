@@ -7,9 +7,16 @@
 #include "mnist_test_inputs.h"
 #include "model_config.h"
 
-//*****************************************************************************
+// Ping-pong activation buffers (SRAM)
+// Only 2 buffers needed - alternated between layers
+// Size = largest activation in network (conv0 output = 28*28*32)
+#define MAX_ACTIVATION_SIZE (28*28*32)  // largest layer output
+static q7_t act0[MAX_ACTIVATION_SIZE];
+static q7_t act1[MAX_ACTIVATION_SIZE];
+static q7_t output[10];
+static q15_t scratch[2*9*64*2];
+
 // UART handle
-//*****************************************************************************
 void *phUART;
 
 #define CHECK_ERRORS(x)                                                       \
@@ -96,9 +103,7 @@ static q15_t scratch[2*9*64*2];
 // Buffer pointers for generic inference
 static q7_t *bufs[] = { buf1, buf2, buf3, buf4, buf5, buf6, buf7, buf8 };
 
-//*****************************************************************************
 // Generic conv layer runner
-//*****************************************************************************
 void run_conv(const ConvConfig_t *cfg, q7_t *in, q7_t *out)
 {
     if(cfg->in_ch == 1)
@@ -129,9 +134,7 @@ void run_conv(const ConvConfig_t *cfg, q7_t *in, q7_t *out)
     arm_relu_q7(out, cfg->out_dim * cfg->out_dim * cfg->out_ch);
 }
 
-//*****************************************************************************
 // Generic pool layer runner
-//*****************************************************************************
 void run_pool(const PoolConfig_t *cfg, q7_t *in, q7_t *out)
 {
     arm_maxpool_q7_HWC(
@@ -141,9 +144,7 @@ void run_pool(const PoolConfig_t *cfg, q7_t *in, q7_t *out)
     );
 }
 
-//*****************************************************************************
 // Generic FC layer runner
-//*****************************************************************************
 void run_fc(const FCConfig_t *cfg, q7_t *in, q7_t *out, int relu)
 {
     arm_fully_connected_q7(
@@ -156,48 +157,64 @@ void run_fc(const FCConfig_t *cfg, q7_t *in, q7_t *out, int relu)
     if(relu)
         arm_relu_q7(out, cfg->out_size);
 }
+// Save buffer to MRAM word by word via SRAM intermediate
+void save_to_mram(q7_t *src, q7_t *dst, uint32_t size_bytes)
+{
+    uint32_t buffer[4];
+    uint32_t *src32 = (uint32_t *)src;
+    uint32_t *dst32 = (uint32_t *)dst;
+    uint32_t words  = (size_bytes + 3) / 4;
+    uint32_t i;
 
-//*****************************************************************************
-// Generic CNN inference
-//*****************************************************************************
+    for(i = 0; i < words; i += 4)
+    {
+        buffer[0] = (i+0 < words) ? src32[i+0] : 0;
+        buffer[1] = (i+1 < words) ? src32[i+1] : 0;
+        buffer[2] = (i+2 < words) ? src32[i+2] : 0;
+        buffer[3] = (i+3 < words) ? src32[i+3] : 0;
+        am_hal_mram_main_program(AM_HAL_MRAM_PROGRAM_KEY,
+                                 buffer,
+                                 &dst32[i],
+                                 4);
+    }
+}
 
 int cnn_inference(const q7_t *input)
 {
-    // Conv0 ? Pool0
-    run_conv(&conv_layers[0], (q7_t*)input, bufs[0]);
-    run_pool(&pool_layers[0], bufs[0], bufs[1]);
-
-    // Conv1 ? Pool1
-    run_conv(&conv_layers[1], bufs[1], bufs[2]);
-    run_pool(&pool_layers[1], bufs[2], bufs[3]);
-
-    // Conv2
-    run_conv(&conv_layers[2], bufs[3], bufs[4]);
-
-    // Conv3 ? Pool2
-    run_conv(&conv_layers[3], bufs[4], bufs[5]);
-    run_pool(&pool_layers[2], bufs[5], bufs[6]);
-
-    // FC1 (with ReLU)
-    run_fc(&fc_layers[0], bufs[6], bufs[7], 1);
-
-    // FCo (no ReLU)
-    run_fc(&fc_layers[1], bufs[7], output, 0);
-
-    // Softmax
+    // Conv0: input -> act0
+    run_conv(&conv_layers[0], (q7_t*)input, act0);
+    
+    // Pool0: act0 -> act1
+    run_pool(&pool_layers[0], act0, act1);
+    
+    // Conv1: act1 -> act0
+    run_conv(&conv_layers[1], act1, act0);
+    
+    // Pool1: act0 -> act1
+    run_pool(&pool_layers[1], act0, act1);
+    
+    // Conv2: act1 -> act0
+    run_conv(&conv_layers[2], act1, act0);
+    
+    // Conv3: act0 -> act1
+    run_conv(&conv_layers[3], act0, act1);
+    
+    // Pool2: act1 -> act0
+    run_pool(&pool_layers[2], act1, act0);
+    
+    // FC1: act0 -> act1
+    run_fc(&fc_layers[0], act0, act1, 1);
+    
+    // FCo: act1 -> output
+    run_fc(&fc_layers[1], act1, output, 0);
+    
     arm_softmax_q7(output, NUM_CLASSES, output);
-
-    // Find predicted class
+    
     int predicted = 0;
     q7_t max_val = output[0];
     for(int i = 1; i < NUM_CLASSES; i++)
-    {
-        if(output[i] > max_val)
-        {
-            max_val = output[i];
-            predicted = i;
-        }
-    }
+        if(output[i] > max_val) { max_val = output[i]; predicted = i; }
+    
     return predicted;
 }
 
@@ -221,7 +238,7 @@ int main(void)
 
 
     // Run inference
-    int predicted = cnn_inference(test_input_d7);
+    int predicted = cnn_inference(test_input_d5);
 
     // Print scores
     am_util_stdio_printf("\nSoftmax Scores:\n");
