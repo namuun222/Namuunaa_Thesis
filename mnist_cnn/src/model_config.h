@@ -4,6 +4,32 @@
 #include "arm_nnfunctions.h"
 #include "weights.h"
 
+// Model config
+#define NUM_CONV_LAYERS  4
+#define NUM_POOL_LAYERS  3
+#define NUM_FC_LAYERS    2
+#define NUM_CLASSES      10
+#define MAX_ACTIVATION_SIZE  (28*28*32)
+#define NUM_BUFFERS 9
+
+#define MRAM_BASE_ADDR   0x00080000 
+#define MRAM_CHECKPOINT  ((uint32_t *)(MRAM_BASE_ADDR + 0x0000))
+
+// Layer outputs stored sequentially in MRAM
+#define MRAM_BUF0   ((q7_t *)(MRAM_BASE_ADDR + 0x1000)) // 25088 bytes
+#define MRAM_BUF1   ((q7_t *)(MRAM_BASE_ADDR + 0x8000)) //  6272 bytes
+#define MRAM_BUF2   ((q7_t *)(MRAM_BASE_ADDR + 0xA000)) //  6272 bytes
+#define MRAM_BUF3   ((q7_t *)(MRAM_BASE_ADDR + 0xC000)) //  1568 bytes
+#define MRAM_BUF4   ((q7_t *)(MRAM_BASE_ADDR + 0xD000)) //  3136 bytes
+#define MRAM_BUF5   ((q7_t *)(MRAM_BASE_ADDR + 0xE000)) //  3136 bytes
+#define MRAM_BUF6   ((q7_t *)(MRAM_BASE_ADDR + 0xF000)) //  1024 bytes
+#define MRAM_BUF7   ((q7_t *)(MRAM_BASE_ADDR + 0xF800)) //   256 bytes
+#define MRAM_OUTPUT ((q7_t *)(MRAM_BASE_ADDR + 0xFC00)) //    10 bytes
+
+#define MAX_KERNEL_SIZE   (3)
+#define MAX_INPUT_CH      (64)
+#define SCRATCH_Q15_SIZE \
+    (2 * MAX_KERNEL_SIZE * MAX_KERNEL_SIZE * MAX_INPUT_CH)
 
 // Layer types
 typedef enum {
@@ -46,12 +72,6 @@ typedef struct {
     uint8_t     bias_shift;
     uint8_t     out_shift;
 } FCConfig_t;
-
-// Model config
-#define NUM_CONV_LAYERS  4
-#define NUM_POOL_LAYERS  3
-#define NUM_FC_LAYERS    2
-#define NUM_CLASSES      10
 
 
 // Conv layers
@@ -99,6 +119,5 @@ static const uint32_t buf_sizes[] = {
     10,         // buf8: fco  output   =    10 bytes
 };
 
-#define NUM_BUFFERS 9
-#define MRAM_BASE    0x0006F000 
+
 #endif // MODEL_CONFIG_H

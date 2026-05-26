@@ -8,13 +8,17 @@
 #include "model_config.h"
 
 // Ping-pong activation buffers (SRAM)
-// Only 2 buffers needed - alternated between layers
-// Size = largest activation in network (conv0 output = 28*28*32)
-#define MAX_ACTIVATION_SIZE (28*28*32)  // largest layer output
+
+__attribute__((aligned(4)))
 static q7_t act0[MAX_ACTIVATION_SIZE];
+
+__attribute__((aligned(4)))
 static q7_t act1[MAX_ACTIVATION_SIZE];
-static q7_t output[10];
-static q15_t scratch[2*9*64*2];
+
+__attribute__((aligned(4)))
+static q15_t scratch[SCRATCH_Q15_SIZE];
+
+static q7_t output[NUM_CLASSES];
 
 // UART handle
 void *phUART;
@@ -84,24 +88,7 @@ void uart_print(char *pcStr)
     if (ui32BytesWritten != ui32StrLen) while(1);
 }
 
-//*****************************************************************************
-// Feature map buffers (SRAM)
-//*****************************************************************************
-static q7_t buf1[28*28*32];   // Conv0 output
-static q7_t buf2[14*14*32];   // Pool0 output
-static q7_t buf3[14*14*32];   // Conv1 output
-static q7_t buf4[7*7*32];     // Pool1 output
-static q7_t buf5[7*7*64];     // Conv2 output
-static q7_t buf6[7*7*64];     // Conv3 output
-static q7_t buf7[4*4*64];     // Pool2 output
-static q7_t buf8[256];        // FC1 output
-static q7_t output[10];       // FCo output
 
-// Scratch buffer for CMSIS-NN
-static q15_t scratch[2*9*64*2];
-
-// Buffer pointers for generic inference
-static q7_t *bufs[] = { buf1, buf2, buf3, buf4, buf5, buf6, buf7, buf8 };
 
 // Generic conv layer runner
 void run_conv(const ConvConfig_t *cfg, q7_t *in, q7_t *out)
@@ -179,36 +166,201 @@ void save_to_mram(q7_t *src, q7_t *dst, uint32_t size_bytes)
     }
 }
 
+// Save checkpoint
+void save_checkpoint(uint32_t layer)
+{
+    uint32_t buffer[4] = {layer, 0, 0, 0};
+
+    am_hal_mram_main_program(
+        AM_HAL_MRAM_PROGRAM_KEY,
+        buffer,
+        MRAM_CHECKPOINT,
+        4
+    );
+}
+
+// Read checkpoint
+uint32_t read_checkpoint(void)
+{
+    return *MRAM_CHECKPOINT;
+}
+
+void restore_from_mram(q7_t *dst, q7_t *src, uint32_t size_bytes)
+{
+    for(uint32_t i = 0; i < size_bytes; i++)
+        dst[i] = src[i];
+}
+
+void verify_mram(q7_t *sram, q7_t *mram, uint32_t size, char *name)
+{
+    uint32_t errors = 0;
+    for(uint32_t i = 0; i < size; i++)
+        if(sram[i] != mram[i]) errors++;
+
+    am_util_stdio_printf("%s: %d/%d match\n", name, size-errors, size);
+    am_util_stdio_printf("  SRAM[0..3]: %d %d %d %d\n",
+        sram[0], sram[1], sram[2], sram[3]);
+    am_util_stdio_printf("  MRAM[0..3]: %d %d %d %d\n",
+        mram[0], mram[1], mram[2], mram[3]);
+    am_hal_uart_tx_flush(phUART);
+}
 int cnn_inference(const q7_t *input)
+{
+    uint32_t cp = read_checkpoint();
+    am_util_stdio_printf("Checkpoint: %d\n", cp);
+
+    // Conv0: input -> act0
+    if(cp < 1) {
+        run_conv(&conv_layers[0], (q7_t*)input, act0);
+        save_to_mram(act0, MRAM_BUF0, buf_sizes[0]);
+        save_checkpoint(1);
+				verify_mram(act0, MRAM_BUF0, 8, "Conv0");
+        am_util_stdio_printf("Conv0 done\n");
+    } else {
+        restore_from_mram(act0, MRAM_BUF0, buf_sizes[0]);
+        am_util_stdio_printf("Conv0 restored\n");
+    }
+
+    // Pool0: act0 -> act1
+    if(cp < 2) {
+        run_pool(&pool_layers[0], act0, act1);
+        save_to_mram(act1, MRAM_BUF1, buf_sizes[1]);
+        save_checkpoint(2);
+        am_util_stdio_printf("Pool0 done\n");
+    } else {
+        restore_from_mram(act1, MRAM_BUF1, buf_sizes[1]);
+        am_util_stdio_printf("Pool0 restored\n");
+    }
+
+    // Conv1: act1 -> act0
+    if(cp < 3) {
+        run_conv(&conv_layers[1], act1, act0);
+        save_to_mram(act0, MRAM_BUF2, buf_sizes[2]);
+        save_checkpoint(3);
+        am_util_stdio_printf("Conv1 done\n");
+    } else {
+        restore_from_mram(act0, MRAM_BUF2, buf_sizes[2]);
+        am_util_stdio_printf("Conv1 restored\n");
+    }
+
+    // Pool1: act0 -> act1
+    if(cp < 4) {
+        run_pool(&pool_layers[1], act0, act1);
+        save_to_mram(act1, MRAM_BUF3, buf_sizes[3]);
+        save_checkpoint(4);
+        am_util_stdio_printf("Pool1 done\n");
+    } else {
+        restore_from_mram(act1, MRAM_BUF3, buf_sizes[3]);
+        am_util_stdio_printf("Pool1 restored\n");
+    }
+
+    // Conv2: act1 -> act0
+    if(cp < 5) {
+        run_conv(&conv_layers[2], act1, act0);
+        save_to_mram(act0, MRAM_BUF4, buf_sizes[4]);
+        save_checkpoint(5);
+        am_util_stdio_printf("Conv2 done\n");
+    } else {
+        restore_from_mram(act0, MRAM_BUF4, buf_sizes[4]);
+        am_util_stdio_printf("Conv2 restored\n");
+    }
+
+    // Conv3: act0 -> act1
+    if(cp < 6) {
+        run_conv(&conv_layers[3], act0, act1);
+        save_to_mram(act1, MRAM_BUF5, buf_sizes[5]);
+        save_checkpoint(6);
+        am_util_stdio_printf("Conv3 done\n");
+    } else {
+        restore_from_mram(act1, MRAM_BUF5, buf_sizes[5]);
+        am_util_stdio_printf("Conv3 restored\n");
+    }
+
+    // Pool2: act1 -> act0
+    if(cp < 7) {
+        run_pool(&pool_layers[2], act1, act0);
+        save_to_mram(act0, MRAM_BUF6, buf_sizes[6]);
+        save_checkpoint(7);
+        am_util_stdio_printf("Pool2 done\n");
+    } else {
+        restore_from_mram(act0, MRAM_BUF6, buf_sizes[6]);
+        am_util_stdio_printf("Pool2 restored\n");
+    }
+
+    // FC1: act0 -> act1
+    if(cp < 8) {
+        run_fc(&fc_layers[0], act0, act1, 1);
+        save_to_mram(act1, MRAM_BUF7, buf_sizes[7]);
+        save_checkpoint(8);
+        am_util_stdio_printf("FC1 done\n");
+    } else {
+        restore_from_mram(act1, MRAM_BUF7, buf_sizes[7]);
+        am_util_stdio_printf("FC1 restored\n");
+    }
+
+    // FCo: act1 -> output (always runs last)
+    run_fc(&fc_layers[1], act1, output, 0);
+    save_to_mram(output, MRAM_OUTPUT, buf_sizes[8]);
+    save_checkpoint(9);
+    am_util_stdio_printf("FCo done\n");
+
+    arm_softmax_q7(output, NUM_CLASSES, output);
+
+    int predicted = 0;
+    q7_t max_val = output[0];
+    for(int i = 1; i < NUM_CLASSES; i++)
+        if(output[i] > max_val) { max_val = output[i]; predicted = i; }
+
+    return predicted;
+}
+
+/*int cnn_inference(const q7_t *input)
 {
     // Conv0: input -> act0
     run_conv(&conv_layers[0], (q7_t*)input, act0);
-    
+    save_to_mram(act0, MRAM_BUF0, buf_sizes[0]);
+
+		save_checkpoint(1);
+	
     // Pool0: act0 -> act1
     run_pool(&pool_layers[0], act0, act1);
+		save_to_mram(act1, MRAM_BUF1, buf_sizes[1]);
+		save_checkpoint(2);
     
     // Conv1: act1 -> act0
     run_conv(&conv_layers[1], act1, act0);
-    
+    save_to_mram(act0, MRAM_BUF2, buf_sizes[2]);
+		save_checkpoint(3);
     // Pool1: act0 -> act1
     run_pool(&pool_layers[1], act0, act1);
+	  save_to_mram(act1, MRAM_BUF3, buf_sizes[3]);
+    save_checkpoint(4);
     
     // Conv2: act1 -> act0
     run_conv(&conv_layers[2], act1, act0);
-    
+    save_to_mram(act0, MRAM_BUF4, buf_sizes[4]);
+    save_checkpoint(5);
     // Conv3: act0 -> act1
     run_conv(&conv_layers[3], act0, act1);
-    
+    save_to_mram(act1, MRAM_BUF5, buf_sizes[5]);
+    save_checkpoint(6);
     // Pool2: act1 -> act0
     run_pool(&pool_layers[2], act1, act0);
-    
+    save_to_mram(act0, MRAM_BUF6, buf_sizes[6]);
+    save_checkpoint(7);
     // FC1: act0 -> act1
     run_fc(&fc_layers[0], act0, act1, 1);
+		save_to_mram(act1, MRAM_BUF7, buf_sizes[7]);
+    save_checkpoint(8);
+
     
     // FCo: act1 -> output
     run_fc(&fc_layers[1], act1, output, 0);
+    save_to_mram(output, MRAM_OUTPUT, buf_sizes[8]);
+    save_checkpoint(9);
     
-    arm_softmax_q7(output, NUM_CLASSES, output);
+		//Softmax
+	  arm_softmax_q7(output, NUM_CLASSES, output);
     
     int predicted = 0;
     q7_t max_val = output[0];
@@ -217,7 +369,7 @@ int cnn_inference(const q7_t *input)
     
     return predicted;
 }
-
+*/
 int main(void)
 {
     // Cache and board init
@@ -237,6 +389,16 @@ int main(void)
     am_util_stdio_printf_init(uart_print);
 
 
+	    // Check checkpoint
+    uint32_t cp = read_checkpoint();
+    if(cp == 0xFFFFFFFF || cp == 9)
+    {
+        am_util_stdio_printf("Fresh start\n");
+        save_checkpoint(0);
+    }
+    else
+        am_util_stdio_printf("Resuming from checkpoint %d\n", cp);
+		
     // Run inference
     int predicted = cnn_inference(test_input_d5);
 
@@ -247,8 +409,10 @@ int main(void)
 
     am_util_stdio_printf("\nPredicted digit: %d\n", predicted);
     am_util_stdio_printf("\nDone!\n");
-
-    am_hal_uart_tx_flush(phUART);
+		
+		    save_checkpoint(0xFFFFFFFF);  // reset for next run
+   
+	 am_hal_uart_tx_flush(phUART);
     CHECK_ERRORS(am_hal_uart_power_control(phUART, AM_HAL_SYSCTRL_DEEPSLEEP, false));
 
     while(1)
