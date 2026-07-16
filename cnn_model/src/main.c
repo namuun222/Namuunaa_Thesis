@@ -3,13 +3,10 @@
 #include "am_util.h"
 #include "am_hal_global.h"
 #include "arm_nnfunctions.h"
-#include "weights.h"
-#include "mnist_test_inputs.h"
-#include "model_config.h"
+#include "model_config.h"       
+#include "mnist_model.h"        
+#include "mnist_test_inputs.h" 
 
-//*****************************************************************************
-// Ping-pong activation buffers (SRAM)
-//*****************************************************************************
 __attribute__((aligned(4)))
 static q7_t act0[MAX_ACTIVATION_SIZE];
 
@@ -22,17 +19,11 @@ static q15_t scratch[SCRATCH_Q15_SIZE];
 __attribute__((aligned(4)))
 static q7_t output[32];
 
-//*****************************************************************************
-// Automatic MRAM layout (computed at startup)
-//*****************************************************************************
 #define MAX_LAYERS  32
-#define ALIGN16(x)  (((x) + 15) & ~15)
+#define ALIGN16(x)  (((x) + 15) & ~15)   // round up to next 16-byte boundary
 
 static q7_t *mram_addrs[MAX_LAYERS];
 
-//*****************************************************************************
-// UART
-//*****************************************************************************
 void *phUART;
 
 #define CHECK_ERRORS(x)                                                       \
@@ -42,7 +33,6 @@ void *phUART;
     }
 
 volatile uint32_t ui32LastError;
-
 void error_handler(uint32_t ui32ErrorStatus)
 {
     ui32LastError = ui32ErrorStatus;
@@ -62,7 +52,6 @@ const am_hal_uart_config_t g_sUartConfig =
     .eTXFifoLevel    = AM_HAL_UART_FIFO_LEVEL_16,
     .eRXFifoLevel    = AM_HAL_UART_FIFO_LEVEL_16,
 };
-
 #if AM_BSP_UART_PRINT_INST == 0
 void am_uart_isr(void)
 #elif AM_BSP_UART_PRINT_INST == 1
@@ -78,7 +67,6 @@ void am_uart3_isr(void)
     am_hal_uart_interrupt_clear(phUART, ui32Status);
     am_hal_uart_interrupt_service(phUART, ui32Status);
 }
-
 void uart_print(char *pcStr)
 {
     uint32_t ui32StrLen = 0;
@@ -100,9 +88,6 @@ void uart_print(char *pcStr)
     if (ui32BytesWritten != ui32StrLen) while(1);
 }
 
-//*****************************************************************************
-// Layer runners
-//*****************************************************************************
 void run_conv(const ConvConfig_t *cfg, q7_t *in, q7_t *out)
 {
     if(cfg->in_ch == 1)
@@ -149,9 +134,8 @@ void run_fc(const FCConfig_t *cfg, q7_t *in, q7_t *out)
     );
 }
 
-//*****************************************************************************
-// MRAM primitives
-//*****************************************************************************
+
+// Writes `size_bytes` of data from an SRAM buffer into MRAM, 16 bytes (4 words) at a time
 void save_to_mram(q7_t *src, q7_t *dst, uint32_t size_bytes)
 {
     uint32_t buffer[4];
@@ -173,12 +157,20 @@ void save_to_mram(q7_t *src, q7_t *dst, uint32_t size_bytes)
     }
 }
 
+// Copies `size_bytes` from MRAM back into an SRAM buffer. Unlike writing,
+// READING from MRAM has no special hardware requirements - it behaves
+// like normal memory-mapped flash, so a plain byte-by-byte copy is safe.
+// Used during checkpoint recovery to bring a previously-completed layer's
+// output back into the ping-pong SRAM buffers.
 void restore_from_mram(q7_t *dst, q7_t *src, uint32_t size_bytes)
 {
     for(uint32_t i = 0; i < size_bytes; i++)
         dst[i] = src[i];
 }
 
+// Writes a single 4-byte counter to a fixed MRAM address, recording
+// "layer `layer` has just completed." This is the value read back on
+// boot to decide whether to resume mid-network or start fresh. 
 void save_checkpoint(uint32_t layer)
 {
     uint32_t buffer[4] = {layer, 0, 0, 0};
@@ -190,21 +182,35 @@ void save_checkpoint(uint32_t layer)
     );
 }
 
+//*****************************************************************************
+// read_checkpoint()
+//
+// Reads back the last saved checkpoint counter from MRAM. Called once at
+// boot to determine whether this is a fresh run (0xFFFFFFFF, MRAM's
+// erased/default state, or a value equal to the total layer count meaning
+// the previous run finished successfully) or a resume after power loss
+// (any value less than the model's layer count).
 uint32_t read_checkpoint(void)
 {
     return *MRAM_CHECKPOINT;
 }
 
-//*****************************************************************************
-// SRAM buffer selection
-//*****************************************************************************
+// Small helper that maps a Layer_t's input_buffer/output_buffer index
+// (0 or 1, as stored in the model description) to the actual act0/act1
+// pointer. Keeps the ping-pong buffer selection in one place.
 static q7_t *get_sram_buffer(uint8_t id)
 {
     return (id == 0) ? act0 : act1;
 }
 
 //*****************************************************************************
-// Checkpoint helpers (take layer index for MRAM address lookup)
+// save_layer_output() / restore_layer_output()
+//
+// Thin wrappers around save_to_mram()/restore_from_mram() that look up
+// the correct SRAM buffer (via the layer's output_buffer index) and the
+// correct MRAM address (via mram_addrs[i], computed by
+// compute_mram_layout()) for a given layer index `i`. Kept as separate
+// helpers so the main inference loop stays readable.
 //*****************************************************************************
 static void save_layer_output(const Layer_t *layer, uint32_t i)
 {
@@ -219,7 +225,18 @@ static void restore_layer_output(const Layer_t *layer, uint32_t i)
 }
 
 //*****************************************************************************
-// Automatic MRAM layout - computed once at startup
+// compute_mram_layout()
+//
+// Walks the model's layer array ONCE at boot and assigns each
+// checkpointed layer (layer->checkpoint == 1) the next free, 16-byte
+// aligned MRAM address, packing them tightly one after another starting
+// at MRAM_BUFFERS_START. Layers with checkpoint == 0 (ReLU, Softmax -
+// cheap to just re-run) get mram_addrs[i] = NULL and are skipped.
+//
+// This is what makes the MRAM checkpoint layout fully automatic: no
+// MRAM_BUFx address is ever hand-written for a specific model. Swapping
+// in a different ModelConfig_t with a different number/size of layers
+// produces a correct, non-overlapping layout with zero manual work.
 //*****************************************************************************
 void compute_mram_layout(const ModelConfig_t *model)
 {
@@ -244,9 +261,6 @@ void compute_mram_layout(const ModelConfig_t *model)
         addr - MRAM_BUFFERS_START);
 }
 
-//*****************************************************************************
-// Generic layer execution
-//*****************************************************************************
 static void execute_layer(const Layer_t *layer, q7_t *in, q7_t *out)
 {
     switch(layer->type)
@@ -264,24 +278,26 @@ static void execute_layer(const Layer_t *layer, q7_t *in, q7_t *out)
             break;
 
         case LAYER_RELU:
-            // in-place on input (input_buffer == output_buffer)
             arm_relu_q7(in, layer->output_size);
             break;
 
         case LAYER_SOFTMAX:
-            // in-place
             arm_softmax_q7(in, layer->output_size, in);
             break;
 
         case LAYER_FLATTEN:
-            // no-op for HWC format
             break;
     }
 }
+//   For each layer i:
+//     - if the saved checkpoint says layer i was NOT completed yet
+//       (cp <= i): execute it normally, then (if it's a checkpointed
+//       layer) save its output to MRAM and advance the checkpoint.
+//     - if layer i WAS already completed in a previous run (cp > i):
+//         - if it has a saved MRAM output, restore it directly
+//           (skip recomputation - this is the whole point of
+//           checkpointing).
 
-//*****************************************************************************
-// Generic CNN inference with checkpoint and recovery
-//*****************************************************************************
 int cnn_inference(const ModelConfig_t *model, const q7_t *input_image)
 {
     uint32_t cp = read_checkpoint();
@@ -294,7 +310,8 @@ int cnn_inference(const ModelConfig_t *model, const q7_t *input_image)
         const Layer_t *layer = &model->layers[i];
         q7_t *in, *out;
 
-        // Input: image for first layer, else SRAM buffer
+        // First layer reads the raw input image; every other layer
+        // reads whichever ping-pong buffer the model description says.
         if(i == 0)
             in = (q7_t*)input_image;
         else
@@ -304,7 +321,6 @@ int cnn_inference(const ModelConfig_t *model, const q7_t *input_image)
 
         if(cp <= i)
         {
-            // Normal execution
             execute_layer(layer, in, out);
 
             if(mram_addrs[i] != NULL)
@@ -312,17 +328,9 @@ int cnn_inference(const ModelConfig_t *model, const q7_t *input_image)
 
             save_checkpoint(i + 1);
             am_util_stdio_printf("Layer %d done\n", i);
-						
-						            if(i == 8)
-            {
-                am_util_stdio_printf(">>> RESET NOW! (5 sec window)\n");
-                am_hal_uart_tx_flush(phUART);
-                am_util_delay_ms(5000);
-            }
         }
         else
         {
-            // Recovery path
             if(mram_addrs[i] != NULL)
             {
                 restore_layer_output(layer, i);
@@ -330,14 +338,12 @@ int cnn_inference(const ModelConfig_t *model, const q7_t *input_image)
             }
             else
             {
-                // RELU/SOFTMAX have no saved state - re-run (cheap!)
                 execute_layer(layer, in, out);
                 am_util_stdio_printf("Layer %d re-executed\n", i);
             }
         }
     }
 
-    // Final output is in the last layer's output buffer
     const Layer_t *last = &model->layers[model->num_layers - 1];
     q7_t *final = get_sram_buffer(last->output_buffer);
 
@@ -346,24 +352,18 @@ int cnn_inference(const ModelConfig_t *model, const q7_t *input_image)
     for(int i = 1; i < model->num_classes; i++)
         if(final[i] > max_val) { max_val = final[i]; predicted = i; }
 
-    // Copy to global output for printing
     for(int i = 0; i < model->num_classes; i++)
         output[i] = final[i];
 
     return predicted;
 }
 
-//*****************************************************************************
-// Main
-//*****************************************************************************
 int main(void)
 {
-    // Cache and board init
     am_hal_cachectrl_config(&am_hal_cachectrl_defaults);
     am_hal_cachectrl_enable();
     am_bsp_low_power_init();
 
-    // UART init
     CHECK_ERRORS(am_hal_uart_initialize(AM_BSP_UART_PRINT_INST, &phUART));
     CHECK_ERRORS(am_hal_uart_power_control(phUART, AM_HAL_SYSCTRL_WAKE, false));
     CHECK_ERRORS(am_hal_uart_configure(phUART, &g_sUartConfig));
@@ -374,13 +374,9 @@ int main(void)
     am_hal_interrupt_master_enable();
     am_util_stdio_printf_init(uart_print);
 
-    // Model pointer - change this line to switch models!
     const ModelConfig_t *model = &mnist_model;
-
-    // Compute MRAM layout automatically from model!
-    compute_mram_layout(model);
-
-    // Check checkpoint status
+   
+		compute_mram_layout(model);
     uint32_t cp = read_checkpoint();
     if(cp == 0xFFFFFFFF || cp >= model->num_layers)
     {
@@ -391,16 +387,13 @@ int main(void)
     {
         am_util_stdio_printf("Resuming from checkpoint %d\n", cp);
     }
+    int predicted = cnn_inference(model, test_input_d4);
 
-    // Run inference
-    int predicted = cnn_inference(model, test_input_d7);
-
-    // Print scores
     am_util_stdio_printf("\nSoftmax Scores:\n");
     for(int i = 0; i < model->num_classes; i++)
-        am_util_stdio_printf("  Digit %d: %d\n", i, output[i]);
+        am_util_stdio_printf("  Class %d: %d\n", i, output[i]);
 
-    am_util_stdio_printf("\nPredicted digit: %d\n", predicted);
+    am_util_stdio_printf("\nPredicted: %d\n", predicted);
     am_util_stdio_printf("\nDone!\n");
 
     save_checkpoint(0xFFFFFFFF);  // reset for next run
