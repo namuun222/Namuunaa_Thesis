@@ -196,16 +196,13 @@ uint32_t read_checkpoint(void)
 }
 
 // Small helper that maps a Layer_t's input_buffer/output_buffer index
-// (0 or 1, as stored in the model description) to the actual act0/act1
-// pointer. Keeps the ping-pong buffer selection in one place.
+// (0 or 1, as stored in the model description) to the actual act0/act1 pointer. 
+//Keeps the ping-pong buffer selection in one place.
 static q7_t *get_sram_buffer(uint8_t id)
 {
     return (id == 0) ? act0 : act1;
 }
 
-//*****************************************************************************
-// save_layer_output() / restore_layer_output()
-//
 // Thin wrappers around save_to_mram()/restore_from_mram() that look up
 // the correct SRAM buffer (via the layer's output_buffer index) and the
 // correct MRAM address (via mram_addrs[i], computed by
@@ -224,20 +221,11 @@ static void restore_layer_output(const Layer_t *layer, uint32_t i)
     restore_from_mram(dst, mram_addrs[i], layer->output_size);
 }
 
-//*****************************************************************************
-// compute_mram_layout()
-//
 // Walks the model's layer array ONCE at boot and assigns each
 // checkpointed layer (layer->checkpoint == 1) the next free, 16-byte
 // aligned MRAM address, packing them tightly one after another starting
 // at MRAM_BUFFERS_START. Layers with checkpoint == 0 (ReLU, Softmax -
 // cheap to just re-run) get mram_addrs[i] = NULL and are skipped.
-//
-// This is what makes the MRAM checkpoint layout fully automatic: no
-// MRAM_BUFx address is ever hand-written for a specific model. Swapping
-// in a different ModelConfig_t with a different number/size of layers
-// produces a correct, non-overlapping layout with zero manual work.
-//*****************************************************************************
 void compute_mram_layout(const ModelConfig_t *model)
 {
     uint32_t addr = MRAM_BUFFERS_START;
@@ -295,8 +283,6 @@ static void execute_layer(const Layer_t *layer, q7_t *in, q7_t *out)
 //       layer) save its output to MRAM and advance the checkpoint.
 //     - if layer i WAS already completed in a previous run (cp > i):
 //         - if it has a saved MRAM output, restore it directly
-//           (skip recomputation - this is the whole point of
-//           checkpointing).
 
 int cnn_inference(const ModelConfig_t *model, const q7_t *input_image)
 {
