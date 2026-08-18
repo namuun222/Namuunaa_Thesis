@@ -1,5 +1,9 @@
 # Namuunaa_Thesis
 
+Intermittent computing on the Apollo4 Blue Lite: a checkpointed CNN inference
+engine that survives power failure by persisting per-layer state to MRAM and
+resuming from the last completed layer on reboot.
+
 ## Environment
 | Tool | Details |
 |------|---------|
@@ -8,7 +12,7 @@
 | Debugger | SEGGER J-Link |
 | SDK | AmbiqSuite R4.5.0 |
 | Terminal | PuTTY (COM3, 115200 baud) |
-| Library | CMSIS-DSP (arm_cortexM4lf_math.lib) |
+| Library | CMSIS-DSP (arm_cortexM4lf_math.lib), CMSIS-NN |
 
 ---
 
@@ -156,15 +160,27 @@ q7 → float:   float_val = q7_val    / 127
 Output = Input + Kernel - 1
        = 4 + 3 - 1 = 6
 Output matrix = 6x6 = 36 values
-
 ```
 
+---
 
-- **Source:** [MNIST-Keras saved models](https://github.com/kj7kunal/MNIST-Keras/tree/master/saved_models)
-- **File:** `MNIST_keras_w_CNN.h5`
-### 3. MNIST_CNN
+## CNN Model (cnn_model/)
 
-### Architecture
+A single Keil project with a shared checkpointed inference engine
+(`main.c` + `model_config.h`) and three swappable benchmark models. Switching
+models means changing the `#include` for the model/weights/test-input headers
+and the `model` pointer passed to `cnn_inference()` — the engine itself does
+not change.
+
+| Model | Status | Headers |
+|-------|--------|---------|
+| MNIST | Working, quantized accuracy 6/10 on-board | `mnist_model.h`, `mnist_weights.h`, `mnist_test_inputs.h` |
+| KWS (keyword spotting) | Working, 7-layer DNN | `kws_model.h`, `kws_weights.h`, `kws_test_inputs.h` |
+| CIFAR | In progress | `cifar_model.h`, `cifar_weights.h`, `cifar_test_inputs.h` |
+
+**Source:** [MNIST-Keras saved models](https://github.com/kj7kunal/MNIST-Keras/tree/master/saved_models) (`MNIST_keras_w_CNN.h5`)
+
+### MNIST Architecture
 
 ```
 Input:  28x28x1 (grayscale image)
@@ -195,7 +211,7 @@ Post-training quantization from float32 to **q7 (8-bit signed integer)**:
 - Scale factor: `127 / max_activation`
 - Shift values computed per layer for CMSIS-NN
 
-**Quantized accuracy on board:** 6/10 test samples correct
+**MNIST quantized accuracy on board:** 6/10 test samples correct
 
 ---
 
@@ -212,7 +228,37 @@ for(i = 0; i < WORDS; i++) {
                              buffer, &dst[i], 4);
 }
 ```
-###  Include Paths
+
+---
+
+## Checkpointing (Intermittent Computing Core)
+
+After each layer executes, its output is optionally persisted to MRAM at a
+fixed address (`mram_addrs[i]`), and a checkpoint pointer is advanced
+(`save_checkpoint(i + 1)`). On reboot, `read_checkpoint()` reports the last
+completed layer; layers before it are restored from MRAM instead of
+recomputed, and execution resumes from there. Activation-only layers
+(ReLU/pooling) have no MRAM address and are simply re-run — cheaper than
+saving/restoring them.
+
+Example MRAM checkpoint layout (KWS model, 7 layers):
+```
+Layer 0: 0x00070000 (144 bytes)
+Layer 2: 0x00070090 (144 bytes)
+Layer 4: 0x00070120 (144 bytes)
+Layer 6: 0x000701B0 (12 bytes)
+Total checkpoint MRAM: 448 bytes
+```
+
+**MRAM write strategy:** writes are batched into groups of 4 words
+(`am_hal_mram_main_program` bulk calls) rather than issued one word at a
+time, which reduces per-call fixed overhead. This dropped measured
+checkpoint overhead from ~5.6% to ~1.9% of total inference time on the KWS
+model (see report for full timing methodology and results).
+
+---
+
+## Include Paths
 
 Add the following to **Project → Options for Target → C/C++ → Include Paths**:
 
@@ -221,7 +267,7 @@ C:\Users\Dell\Namuunaa_Thesis\CMSIS_5-5.9.0\CMSIS_5-5.9.0\CMSIS\NN\Include
 C:\Users\Dell\Namuunaa_Thesis\CMSIS_5-5.9.0\CMSIS_5-5.9.0\CMSIS\Core\Include
 ```
 
-### Preprocessor Defines
+## Preprocessor Defines
 
 Add the following to **Project → Options for Target → C/C++ → Define**:
 
@@ -229,7 +275,7 @@ Add the following to **Project → Options for Target → C/C++ → Define**:
 AM_PACKAGE_BGA AM_PART_APOLLO4L keil6 ARM_MATH_CM4 ARM_MATH_DSP
 ```
 
-###  CMSIS-NN Source Files
+## CMSIS-NN Source Files
 
 Create a group `cnn_mnist` in the project and add these source files:
 
@@ -258,9 +304,12 @@ CMSIS_5-5.9.0\CMSIS\NN\Source\SoftmaxFunctions\
 
 | File | Description |
 |------|-------------|
-| `src/mnist_cnn.c` | Main inference code — UART init, weight storage, CNN layers |
-| `src/weights.h` | Quantized q7 weights, biases, and shift values |
-| `src/mnist_test_inputs.h` | Real MNIST test samples (one per digit 0-9) |
+| `src/main.c` | Main inference driver — UART init, timer setup, checkpointed CNN inference, experiment runner |
+| `src/model_config.h` | Shared `ModelConfig_t` / `Layer_t` structures and engine config |
+| `src/mnist_model.h`, `src/kws_model.h`, `src/cifar_model.h` | Per-model architecture description |
+| `src/mnist_weights.h`, `src/kws_weights.h`, `src/cifar_weights.h` | Quantized q7 weights, biases, and shift values |
+| `src/mnist_test_inputs.h`, `src/kws_test_inputs.h`, `src/cifar_test_inputs.h` | Real test samples per model |
+| `src/am_resources.c` | Board/peripheral resource definitions |
 
 ---
 
@@ -268,13 +317,24 @@ CMSIS_5-5.9.0\CMSIS\NN\Source\SoftmaxFunctions\
 
 | Function | Purpose |
 |----------|---------|
-| `arm_convolve_HWC_q7_basic()` | Conv0 (1 input channel) |
-| `arm_convolve_HWC_q7_fast()` | Conv1, Conv2, Conv3 (SIMD optimized) |
+| `arm_convolve_HWC_q7_basic()` | First conv layer (1 input channel) |
+| `arm_convolve_HWC_q7_fast()` | Subsequent conv layers (SIMD optimized) |
 | `arm_maxpool_q7_HWC()` | MaxPool layers |
 | `arm_relu_q7()` | ReLU activation |
-| `arm_fully_connected_q7()` | FC1 and FCo layers |
+| `arm_fully_connected_q7()` | Fully connected layers |
 | `arm_softmax_q7()` | Output probabilities |
 
 ---
 
+## Timing & Energy Analysis
 
+Per-layer execution, checkpoint-save, and recovery-restore times are measured
+using the STIMER free-running counter (6 MHz), with energy estimated from
+datasheet current draw. Three experiments per model:
+
+- **A** — continuous power, no checkpointing (baseline cost)
+- **B** — checkpointing enabled, no failure (checkpoint overhead)
+- **C** — recovery cost as a function of failure point (justifies checkpointing)
+
+Full methodology, per-model results, and the recovery-cost crossover analysis
+are in the thesis report.
